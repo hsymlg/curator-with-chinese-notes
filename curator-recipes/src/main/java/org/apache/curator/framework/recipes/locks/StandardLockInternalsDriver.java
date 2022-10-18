@@ -32,10 +32,14 @@ public class StandardLockInternalsDriver implements LockInternalsDriver
     @Override
     public PredicateResults getsTheLock(CuratorFramework client, List<String> children, String sequenceNodeName, int maxLeases) throws Exception
     {
+        //获取当前节点在所有子节点排序后的索引位置
         int             ourIndex = children.indexOf(sequenceNodeName);
+        //判断当前节点是否处于子节点中
         validateOurIndex(sequenceNodeName, ourIndex);
-
+        //InterProcessMutex的构造方法,会将maxLeases初始化为1
+        //ourIndex必须为0,才能使得getsTheLock为true,也就是说,当前节点必须是basePath下的最小节点,才能代表获取到了锁
         boolean         getsTheLock = ourIndex < maxLeases;
+        //如果获取不到锁,则返回上一个节点的名称,用作对其设置监听
         String          pathToWatch = getsTheLock ? null : children.get(ourIndex - maxLeases);
 
         return new PredicateResults(pathToWatch, getsTheLock);
@@ -78,6 +82,7 @@ public class StandardLockInternalsDriver implements LockInternalsDriver
     {
         if ( ourIndex < 0 )
         {
+            //可能会由于连接丢失导致临时节点被删除,因此这里属于保险措施
             throw new KeeperException.NoNodeException("Sequential path not found: " + sequenceNodeName);
         }
     }

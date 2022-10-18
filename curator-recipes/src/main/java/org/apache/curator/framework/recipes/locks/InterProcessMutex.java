@@ -44,8 +44,11 @@ public class InterProcessMutex implements InterProcessLock, Revocable<InterProce
 
     private static class LockData
     {
+        //加锁线程
         final Thread owningThread;
+        //加锁路径
         final String lockPath;
+        //重入计数
         final AtomicInteger lockCount = new AtomicInteger(1);
 
         private LockData(Thread owningThread, String lockPath)
@@ -141,6 +144,7 @@ public class InterProcessMutex implements InterProcessLock, Revocable<InterProce
         }
 
         int newLockCount = lockData.lockCount.decrementAndGet();
+        //直接减少一次重入次数
         if ( newLockCount > 0 )
         {
             return;
@@ -149,12 +153,15 @@ public class InterProcessMutex implements InterProcessLock, Revocable<InterProce
         {
             throw new IllegalMonitorStateException("Lock count has gone negative for lock: " + basePath);
         }
+        //到这里代表重入次数为0
         try
         {
+            //释放锁
             internals.releaseLock(lockData.lockPath);
         }
         finally
         {
+            //从map中移除
             threadData.remove(currentThread);
         }
     }
@@ -223,20 +230,22 @@ public class InterProcessMutex implements InterProcessLock, Revocable<InterProce
            Note on concurrency: a given lockData instance
            can be only acted on by a single thread so locking isn't necessary
         */
-
+        //获取当前线程
         Thread currentThread = Thread.currentThread();
-
+        //通过能否在map中取到该线程的LockData信息,来判断该线程是否已经持有锁
         LockData lockData = threadData.get(currentThread);
         if ( lockData != null )
         {
-            // re-entering
+            //因为当前线程的锁存在，lockcount自增后返回，变成重入锁
+            //进行可重入,直接返回加锁成功
             lockData.lockCount.incrementAndGet();
             return true;
         }
-
+        //进行加锁
         String lockPath = internals.attemptLock(time, unit, getLockNodeBytes());
         if ( lockPath != null )
         {
+            //加锁成功,保存到map中
             LockData newLockData = new LockData(currentThread, lockPath);
             threadData.put(currentThread, newLockData);
             return true;

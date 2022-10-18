@@ -121,6 +121,7 @@ public class LockInternals
     {
         client.removeWatchers();
         revocable.set(null);
+        //内部使用guaranteed,会在后台不断尝试删除节点
         deleteOurPath(lockPath);
     }
 
@@ -208,13 +209,19 @@ public class LockInternals
 
     String attemptLock(long time, TimeUnit unit, byte[] lockNodeBytes) throws Exception
     {
+        //开始时间
         final long      startMillis = System.currentTimeMillis();
+        //将超时时间统一转化为毫秒单位
         final Long      millisToWait = (unit != null) ? unit.toMillis(time) : null;
+        //节点数据,这里为null
         final byte[]    localLockNodeBytes = (revocable.get() != null) ? new byte[0] : lockNodeBytes;
+        //重试次数
         int             retryCount = 0;
-
+        //锁路径
         String          ourPath = null;
+        //是否获取到锁
         boolean         hasTheLock = false;
+        //是否完成
         boolean         isDone = false;
         while ( !isDone )
         {
@@ -222,13 +229,19 @@ public class LockInternals
 
             try
             {
+                //创建一个临时有序节点，并返回节点路径
+                //内部调用client.create().creatingParentContainersIfNeeded().withProtection().withMode(CreateMode.EPHEMERAL_SEQUENTIAL).forPath(path);
                 ourPath = driver.createsTheLock(client, path, localLockNodeBytes);
+                //是否创建锁成功
+                //依据返回的节点路径,判断是否抢到了锁
                 hasTheLock = internalLockLoop(startMillis, millisToWait, ourPath);
             }
             catch ( KeeperException.NoNodeException e )
             {
                 // gets thrown by StandardLockInternalsDriver when it can't find the lock node
                 // this can happen when the session expires, etc. So, if the retry allows, just try it all again
+                //在会话过期时,可能导致driver找不到临时有序节点,从而抛出NoNodeException
+                //这里就进行重试
                 if ( client.getZookeeperClient().getRetryPolicy().allowRetry(retryCount++, System.currentTimeMillis() - startMillis, RetryLoop.getDefaultRetrySleeper()) )
                 {
                     isDone = false;
@@ -239,7 +252,7 @@ public class LockInternals
                 }
             }
         }
-
+        //获取到锁,则返回节点路径,供调用方记录到map中
         if ( hasTheLock )
         {
             return ourPath;
@@ -270,27 +283,35 @@ public class LockInternals
 
     private boolean internalLockLoop(long startMillis, Long millisToWait, String ourPath) throws Exception
     {
+        //是否获取到锁
         boolean     haveTheLock = false;
         boolean     doDelete = false;
         try
         {
             if ( revocable.get() != null )
             {
+                //当前不会进入这里
+                //给前一个节点设置了监听器，当该节点被删除时，将会触发watcher中的回调
                 client.getData().usingWatcher(revocableWatcher).forPath(ourPath);
             }
-
+            //一直尝试获取锁
             while ( (client.getState() == CuratorFrameworkState.STARTED) && !haveTheLock )
             {
+                //返回basePath(这里是lockqcy)下所有的临时有序节点,并且按照后缀从小到大排列
                 List<String>        children = getSortedChildren();
+                //取出当前线程创建出来的临时有序节点的名称,这里就是/_c_c46513c3-ace0-405f-aa1e-a531ce28fb47-lock-0000000005
                 String              sequenceNodeName = ourPath.substring(basePath.length() + 1); // +1 to include the slash
-
+                //判断当前节点是否处于排序后的首位,如果处于首位,则代表获取到了锁
                 PredicateResults    predicateResults = driver.getsTheLock(client, children, sequenceNodeName, maxLeases);
                 if ( predicateResults.getsTheLock() )
                 {
+                    //获取到锁之后,则终止循环
                     haveTheLock = true;
                 }
                 else
                 {
+                    //这里代表没有获取到锁
+                    //获取比当前节点索引小的前一个节点
                     String  previousSequencePath = basePath + "/" + predicateResults.getPathToWatch();
 
                     synchronized(this)
@@ -298,26 +319,32 @@ public class LockInternals
                         try
                         {
                             // use getData() instead of exists() to avoid leaving unneeded watchers which is a type of resource leak
+                            //如果前一个节点不存在,则直接抛出NoNodeException,catch中不进行处理,在下一轮中继续获取锁
+                            //如果前一个节点存在,则给它设置一个监听器,监听它的释放事件
                             client.getData().usingWatcher(watcher).forPath(previousSequencePath);
                             if ( millisToWait != null )
                             {
                                 millisToWait -= (System.currentTimeMillis() - startMillis);
                                 startMillis = System.currentTimeMillis();
+                                //判断是否超时
                                 if ( millisToWait <= 0 )
                                 {
+                                    //获取锁超时,删除刚才创建的临时有序节点
                                     doDelete = true;    // timed out - delete our node
                                     break;
                                 }
-
+                                //没超时的话,在millisToWait内进行等待
                                 wait(millisToWait);
                             }
                             else
                             {
+                                //无限期阻塞等待,监听到前一个节点被删除时,才会触发唤醒操作
                                 wait();
                             }
                         }
                         catch ( KeeperException.NoNodeException e )
                         {
+                            //如果前一个节点不存在,则直接抛出NoNodeException,catch中不进行处理,在下一轮中继续获取锁
                             // it has been deleted (i.e. lock released). Try to acquire again
                         }
                     }
@@ -334,6 +361,7 @@ public class LockInternals
         {
             if ( doDelete )
             {
+                //删除刚才创建出来的临时有序节点
                 deleteOurPath(ourPath);
             }
         }

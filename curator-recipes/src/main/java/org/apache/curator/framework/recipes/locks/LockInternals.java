@@ -230,18 +230,13 @@ public class LockInternals
             try
             {
                 //创建一个临时有序节点，并返回节点路径
-                //内部调用client.create().creatingParentContainersIfNeeded().withProtection().withMode(CreateMode.EPHEMERAL_SEQUENTIAL).forPath(path);
                 ourPath = driver.createsTheLock(client, path, localLockNodeBytes);
-                //是否创建锁成功
-                //依据返回的节点路径,判断是否抢到了锁
+                //依据返回的节点路径,判断是否抢到了锁;阻塞，直到获取锁成功
                 hasTheLock = internalLockLoop(startMillis, millisToWait, ourPath);
             }
             catch ( KeeperException.NoNodeException e )
             {
-                // gets thrown by StandardLockInternalsDriver when it can't find the lock node
-                // this can happen when the session expires, etc. So, if the retry allows, just try it all again
-                //在会话过期时,可能导致driver找不到临时有序节点,从而抛出NoNodeException
-                //这里就进行重试
+                //在会话过期时,可能导致driver找不到临时有序节点,进行重试,失败抛出NoNodeException,进行重试
                 if ( client.getZookeeperClient().getRetryPolicy().allowRetry(retryCount++, System.currentTimeMillis() - startMillis, RetryLoop.getDefaultRetrySleeper()) )
                 {
                     isDone = false;
@@ -290,17 +285,16 @@ public class LockInternals
         {
             if ( revocable.get() != null )
             {
-                //当前不会进入这里
                 //给前一个节点设置了监听器，当该节点被删除时，将会触发watcher中的回调
                 client.getData().usingWatcher(revocableWatcher).forPath(ourPath);
             }
             //一直尝试获取锁
             while ( (client.getState() == CuratorFrameworkState.STARTED) && !haveTheLock )
             {
-                //返回basePath(这里是lockqcy)下所有的临时有序节点,并且按照后缀从小到大排列
+                //返回basePath下所有的临时有序节点,并且按照后缀从小到大排列
                 List<String>        children = getSortedChildren();
-                //取出当前线程创建出来的临时有序节点的名称,这里就是/_c_c46513c3-ace0-405f-aa1e-a531ce28fb47-lock-0000000005
-                String              sequenceNodeName = ourPath.substring(basePath.length() + 1); // +1 to include the slash
+                //取出当前线程创建出来的临时有序节点的名称
+                String              sequenceNodeName = ourPath.substring(basePath.length() + 1);
                 //判断当前节点是否处于排序后的首位,如果处于首位,则代表获取到了锁
                 PredicateResults    predicateResults = driver.getsTheLock(client, children, sequenceNodeName, maxLeases);
                 if ( predicateResults.getsTheLock() )
@@ -318,7 +312,6 @@ public class LockInternals
                     {
                         try
                         {
-                            // use getData() instead of exists() to avoid leaving unneeded watchers which is a type of resource leak
                             //如果前一个节点不存在,则直接抛出NoNodeException,catch中不进行处理,在下一轮中继续获取锁
                             //如果前一个节点存在,则给它设置一个监听器,监听它的释放事件
                             client.getData().usingWatcher(watcher).forPath(previousSequencePath);
@@ -330,7 +323,7 @@ public class LockInternals
                                 if ( millisToWait <= 0 )
                                 {
                                     //获取锁超时,删除刚才创建的临时有序节点
-                                    doDelete = true;    // timed out - delete our node
+                                    doDelete = true;
                                     break;
                                 }
                                 //没超时的话,在millisToWait内进行等待
@@ -345,7 +338,6 @@ public class LockInternals
                         catch ( KeeperException.NoNodeException e )
                         {
                             //如果前一个节点不存在,则直接抛出NoNodeException,catch中不进行处理,在下一轮中继续获取锁
-                            // it has been deleted (i.e. lock released). Try to acquire again
                         }
                     }
                 }

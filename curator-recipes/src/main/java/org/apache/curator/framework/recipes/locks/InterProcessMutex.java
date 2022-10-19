@@ -37,7 +37,9 @@ import org.apache.curator.utils.PathUtils;
  */
 public class InterProcessMutex implements InterProcessLock, Revocable<InterProcessMutex>
 {
+    //锁的实现都在该类中，InterProcessMutex通过此类的方法实现锁
     private final LockInternals internals;
+    //锁节点在zk中的根路径
     private final String basePath;
 
     private final ConcurrentMap<Thread, LockData> threadData = Maps.newConcurrentMap();
@@ -226,10 +228,6 @@ public class InterProcessMutex implements InterProcessLock, Revocable<InterProce
 
     private boolean internalLock(long time, TimeUnit unit) throws Exception
     {
-        /*
-           Note on concurrency: a given lockData instance
-           can be only acted on by a single thread so locking isn't necessary
-        */
         //获取当前线程
         Thread currentThread = Thread.currentThread();
         //通过能否在map中取到该线程的LockData信息,来判断该线程是否已经持有锁
@@ -237,11 +235,10 @@ public class InterProcessMutex implements InterProcessLock, Revocable<InterProce
         if ( lockData != null )
         {
             //因为当前线程的锁存在，lockcount自增后返回，变成重入锁
-            //进行可重入,直接返回加锁成功
             lockData.lockCount.incrementAndGet();
             return true;
         }
-        //进行加锁
+        //当前线程的锁不存在，进行加锁
         String lockPath = internals.attemptLock(time, unit, getLockNodeBytes());
         if ( lockPath != null )
         {
